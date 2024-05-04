@@ -1,0 +1,234 @@
+%{
+
+#define YYERROR_VERBOSE 1
+#define YYDEBUG 1
+#define YY_NO_UNISTD_H
+
+extern "C" int yylex();
+void yyerror(const char* error);
+
+#include "../src/lex.h"
+#include <vector>
+
+%}
+
+%union {
+	AstNode		*ast;
+	char		*str;
+}
+
+
+%left			TOK_OR
+%left			TOK_AND
+%left			TOK_EQUAL TOK_GE TOK_LE TOK_NON_EQUAL '<' '>'
+%left			'+' '-'
+%left			'*' '/' '%'
+%left 			'&' '|' '^'
+%left 			'(' ')'
+%left 			TOK_DOT
+
+%right			'!' TOK_TO TOK_DOUBLE_TO
+%token			TOK_FROM
+
+%token			TOK_TRUE TOK_FALSE TOK_UNIT
+%token			TOK_IMPORT TOK_FUN TOK_IF TOK_ELSE TOK_VAL TOK_RETURN
+%token<str>		TOK_NUMBER_INT TOK_NUMBER_DOUBLE
+
+%token<str> 	L_IDENTIFIER U_IDENTIFIER // 大写或小写开头的标识符.
+%token<ast>		STR_LITERAL  // 字符串字面量
+
+%token			TOK_SEP
+%type<ast>		expr number_expr binary_expr if_expr statement
+				exprBlock call_expr boolean_expr array_expr
+				index_expr lambda_expr unit_expr unary_expr
+
+%type<ast>		prototype fun_def import prototype_short
+%type<ast>		package
+
+%type<ast>		exprs val_def_shorts stmts defs
+
+%type<ast>		val_def def val_def_short ret
+
+%type<ast>		stmtsHead
+
+%type<ast> 		type_identifier type_param type_parameters func_type_identifier type_identifiers
+
+%%
+
+%start package;
+
+// 类型标识符
+type_identifier
+	: U_IDENTIFIER							{ $$ = makeType($1); }
+	| U_IDENTIFIER '[' type_parameters ']'	{ $$ = makeType($1, $3); }
+	| func_type_identifier
+	;
+
+func_type_identifier
+	: '(' ')' TOK_TO type_identifier					{ $$ = makeFunctionType(link(), $4); }
+	| '(' type_identifiers ')' TOK_TO type_identifier	{ $$ = makeFunctionType($2, $5); }
+	;
+
+type_identifiers
+	: type_identifier						{ $$ = link($1); }
+	| type_identifiers ',' type_identifier 	{ $$ = link($1, $3); }
+
+type_parameters
+	: type_param							{ $$ = link($1); }
+	| type_parameters ',' type_param		{ $$ = link($1, $3); }
+	;
+
+type_param
+	: type_identifier
+	| TOK_NUMBER_INT				{ $$ = makeNumber(stoi($1)); }
+	;
+
+// 语句
+statement
+	: expr
+	| def
+	| ret
+	;
+
+ret
+	: TOK_RETURN expr				{ $$ = makeReturn($2); }
+	| TOK_RETURN					{ $$ = makeReturn(makeUnit()); }
+	;
+
+// 表达式
+expr
+	: L_IDENTIFIER					{ $$ = makeValue($1); }
+	| '(' expr ')'					{ $$ = $2; }
+
+	| call_expr		| binary_expr 	| number_expr
+	| boolean_expr	| if_expr 		| array_expr 	| index_expr
+	| lambda_expr	| unit_expr		| unary_expr
+	;
+
+call_expr
+	: L_IDENTIFIER '(' ')'			{ $$ = makeCall($1, link()); }
+	| L_IDENTIFIER '(' exprs ')'	{ $$ = makeCall($1, $3); }
+	;
+
+index_expr
+	: L_IDENTIFIER '[' exprs ']'	{ $$ = makeIndex($1, $3); }
+	;
+
+binary_expr
+	: expr '+' expr					{ $$ = makeBinaryExpr($1, '+', $3); }
+	| expr '-' expr					{ $$ = makeBinaryExpr($1, '-', $3); }
+	| expr '*' expr					{ $$ = makeBinaryExpr($1, '*', $3); }
+	| expr '/' expr					{ $$ = makeBinaryExpr($1, '/', $3); }
+	| expr '%' expr					{ $$ = makeBinaryExpr($1, '%', $3); }
+	| expr '<' expr					{ $$ = makeBinaryExpr($1, '<', $3); }
+	| expr '>' expr					{ $$ = makeBinaryExpr($1, '>', $3); }
+	| expr TOK_EQUAL expr			{ $$ = makeBinaryExpr($1, TOK_EQUAL, $3); }
+	| expr TOK_NON_EQUAL expr		{ $$ = makeBinaryExpr($1, TOK_NON_EQUAL, $3); }
+	| expr TOK_LE expr				{ $$ = makeBinaryExpr($1, TOK_LE, $3); }
+	| expr TOK_GE expr				{ $$ = makeBinaryExpr($1, TOK_GE, $3); }
+	| expr TOK_OR expr				{ $$ = makeBinaryExpr($1, TOK_OR, $3); }
+	| expr TOK_AND expr				{ $$ = makeBinaryExpr($1, TOK_AND, $3); }
+	;
+	// 为了解决TOKEN结合性的问题, 只能这么展开写...
+
+unary_expr
+	: '!' expr						{ $$ = makeUnaryExpr('!', $2); }
+	;
+
+array_expr
+	: '[' ']'						{ $$ = makeArray(link()); }
+	| '[' exprs ']'					{ $$ = makeArray($2); }
+	;
+
+number_expr
+	: TOK_NUMBER_INT	{ $$ = makeNumber(stoi($1)); }
+	| TOK_NUMBER_DOUBLE	{ $$ = makeNumber(stod($1)); }
+	;
+
+boolean_expr
+	: TOK_TRUE			{ $$ = makeBoolean(true); }
+	| TOK_FALSE			{ $$ = makeBoolean(false); }
+	;
+
+unit_expr
+	: TOK_UNIT			{ $$ = makeUnit(); }
+	;
+
+if_expr
+	: TOK_IF expr exprBlock TOK_ELSE exprBlock			{ $$ = makeIf($2, $3, $5); }
+	| TOK_IF expr exprBlock TOK_ELSE if_expr			{ $$ = makeIf($2, $3, $5); }
+	| TOK_IF expr exprBlock								{ $$ = makeIf($2, $3, makeExprBlock()); }
+	;
+
+lambda_expr
+	: '{' val_def_shorts TOK_TO stmts'}'			{ $$ = makeLambda($2, $4); }
+	| '{' stmts '}'									{ $$ = makeLambda(link(), $2); }
+	;
+
+
+
+// 函数定义和外部引用
+fun_def
+	: TOK_FUN prototype '=' expr			{ $$ = makeFunDef($2, makeExprBlock(link($4))); }
+	| TOK_FUN prototype_short '=' expr		{ $$ = makeFunDef($2, makeExprBlock(link($4))); }
+	| TOK_FUN prototype exprBlock			{ $$ = makeFunDef($2, $3); }
+	;
+
+exprBlock
+	: '{' stmts '}'							{ $$ = makeExprBlock($2); };
+	| '{' '}'								{ $$ = makeExprBlock(link()); }
+
+import: 	TOK_IMPORT prototype 			{ $$ = makeImport($2); };
+
+prototype
+	: prototype_short ':' type_identifier	{ $$ = setPrototypeReturnType($1, $3); }
+	;
+
+prototype_short
+	: L_IDENTIFIER '(' ')'					{ $$ = makePrototype($1, link()); }
+	| L_IDENTIFIER '(' val_def_shorts ')'	{ $$ = makePrototype($1, $3); }
+	;
+
+
+// 定义
+def: val_def | fun_def | import;
+
+// 变量定义
+val_def: 	TOK_VAL val_def_short '=' expr		{ $$ = makeAssignVal($2, $4); }
+val_def_short
+	: L_IDENTIFIER ':' type_identifier			{ $$ = makeVariableDef($1, $3); }
+	| L_IDENTIFIER								{ $$ = makeVariableDef($1, nullptr); }
+
+
+// (最高层次) 包和行
+package
+	: 					{ $$ = link(); }
+	| defs				{ makePackage($1); $$ = link(); }
+	;
+
+// 列表
+exprs
+	: expr						{ $$ = link($1); }
+	| exprs ',' expr			{ $$ = link($1, $3); }
+	;
+
+defs
+	: def 		{ $$ = link($1); }
+	| defs def	{ $$ = link($1, $2); }
+	;
+
+val_def_shorts
+	: val_def_short							{ $$ = link($1); }
+	| val_def_shorts ',' val_def_short		{ $$ = link($1, $3); }
+	;
+
+stmts
+	: statement				{ $$ = link($1); }
+	| stmtsHead				{ $$ = $1; }
+	| stmtsHead statement	{ $$ = link($1, $2); }
+	;
+
+stmtsHead
+	: statement TOK_SEP				{ $$ = link($1); }
+	| stmtsHead statement TOK_SEP 	{ $$ = link($1, $2); }
+	;

@@ -1,0 +1,6 @@
+cmake-build-debug/*
+.idea/*
+build/*
+compiler/lex/.igniter.l.swp
+compiler/lex/.igniter.yxx.swp
+.sample.ing.swp

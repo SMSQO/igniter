@@ -1,0 +1,10 @@
+import inputi(): Int
+import greeting(): Int
+
+fun main(): Int {
+	val x = inputi();
+	if (x > 16) {
+		greeting();
+	};
+	0
+}
